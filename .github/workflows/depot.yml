@@ -1,0 +1,114 @@
+name: Compilar LineageOS 20 en Namespace (Ubuntu 22.04)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    # Apuntamos al runner de 8 núcleos con Ubuntu 22.04
+    runs-on: depot-ubuntu-22.04-64
+    
+    steps:
+    - name: Limpieza Agresiva
+      run: |
+        echo "Espacio disponible ANTES de la limpieza:"
+        df -h
+        
+        # Eliminar los directorios de toolchains más grandes que no necesitamos
+        sudo rm -rf /usr/share/dotnet          # Toolchain de .NET
+        sudo rm -rf /opt/ghc                   # Toolchain de Haskell
+        sudo rm -rf /usr/local/lib/android     # Android SDK (AOSP trae el suyo)
+        sudo rm -rf /usr/local/share/powershell # PowerShell
+        sudo rm -rf /usr/share/swift           # Toolchain de Swift
+        sudo rm -rf /opt/hostedtoolcache       # Caché de herramientas de Actions
+        sudo rm -rf /usr/lib/jvm               # Versiones de Java preinstaladas
+        sudo rm -rf /usr/local/go
+        sudo rm -rf /opt/google/chrome
+        sudo rm -rf /usr/share/rust
+        sudo rm -rf /usr/local/lib/node
+        sudo rm -rf /usr/share/doc/*
+        sudo rm -rf /usr/share/man/*
+        (sudo systemctl stop docker) || true
+        (sudo rm -rf /var/lib/docker) || true
+        sudo umount /snap/core* || true
+        sudo apt-get purge -y --auto-remove snapd
+        sudo rm -rf /snap
+        sudo rm -rf ~/snap
+        sudo rm -rf /var/snap
+        sudo rm -rf /var/lib/snapd
+        sudo rm -rf /usr/lib/google-cloud-sdk
+        sudo rm -rf /usr/lib/heroku
+        sudo rm -rf /usr/lib/R
+        sudo rm -rf /usr/lib/ruby
+        sudo rm -rf /usr/lib/php
+        sudo rm -rf /usr/share/miniconda
+        sudo rm -rf /usr/share/az_*
+        sudo rm -rf /usr/share/gradle-*
+        sudo rm -rf /usr/share/sbt
+        sudo rm -rf /usr/share/kotlinc
+        sudo rm -rf /usr/share/java
+        sudo rm -rf /usr/share/apache-maven-*
+        sudo rm -rf /usr/local/*
+            
+        # Usamos el comando de purga que, aunque ruidoso, liberó 51GB
+        sudo apt-get purge -y --auto-remove $(dpkg --get-selections | grep -i -E "dotnet|haskell|azure|postgresql|mysql|mongodb|powershell|mono|llvm|firefox|gnome|libgtk" | awk '{print $1}') || true
+        sudo apt-get clean
+        sudo rm -rf /usr/local/*
+        echo "Espacio disponible DESPUÉS de la limpieza:"
+        df -h
+        
+    - name: Preparar Entorno de Compilación
+      run: |
+        # Instalar dependencias para Ubuntu 22.04
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends bc bison build-essential ccache curl flex g++-multilib gcc-multilib git gnupg gperf imagemagick lib32ncurses-dev lib32readline-dev lib32z1-dev libelf-dev liblz4-tool libncurses-dev libncurses5 libsdl1.2-dev libssl-dev libxml2-utils lzop pngcrush rsync schedtool squashfs-tools xsltproc zip zlib1g-dev python3
+        
+        # Instalar repo
+        mkdir -p ~/bin
+        curl https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
+        chmod a+x ~/bin/repo
+        echo "$HOME/bin" >> $GITHUB_PATH
+
+    - name: Sincronizar Código Fuente (Mínimo)
+      run: |
+        mkdir workspace
+        cd workspace
+        git config --global user.name "maxsteeel"
+        git config --global user.email "quinteroalejandro2009@gmail.com"
+        repo init -u https://github.com/LineageOS/android.git -b lineage-20.0 -g default,-qcom,-pdk-qcom,-qcom_sdm845,-coral,-mips,-darwin,-notdefault --depth=1 --git-lfs
+        mkdir -p .repo/local_manifests
+        echo '<?xml version="1.0" encoding="UTF-8"?>
+        <manifest>
+          <project name="maxsteeel/device_infinix_Infinix-X6525" path="device/infinix/Infinix-X6525" remote="github" revision="X6525-user-13-TP1A.220624.014-185-release-keys" />
+          <project name="maxsteeel/vendor_infinix_Infinix-X6525" path="vendor/infinix/Infinix-X6525" remote="github" revision="X6525-user-13-TP1A.220624.014-185-release-keys" />
+          <project name="maxsteeel/kernel_infinix_Infinix-X6525" path="kernel/infinix/Infinix-X6525" remote="github" revision="X6525-user-13-TP1A.220624.014-185-release-keys" />
+        </manifest>' > .repo/local_manifests/roomservice.xml
+        
+    - name: Cache del Código Fuente
+      uses: actions/cache@v4
+      with:
+       path: workspace/.repo # Directorio donde repo guarda sus metadatos
+       key: ${{ runner.os }}-repo-${{ hashFiles('**/default.xml') }} # Clave para identificar el caché
+
+          
+    - name: Sincronizar Fuentes de la ROM
+      run: |
+        cd workspace
+        # Usamos la sincronización más minimalista posible
+        echo "repo syncing"
+        repo sync -c --force-sync --no-clone-bundle --no-tags --optimized-fetch --prune -j8
+        
+    - name: Compilar la ROM
+      run: |
+        cd workspace
+        source build/envsetup.sh
+        lunch lineage_X6525-userdebug
+        
+        mka bacon -j$(nproc --all)
+        
+    - name: Subir Artefacto
+      uses: actions/upload-artifact@v4
+      with:
+        name: LineageOS-20-X6525
+        path: workspace/out/target/product/X6525/*.zip
+    
