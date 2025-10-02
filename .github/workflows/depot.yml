@@ -6,7 +6,7 @@ on:
 jobs:
   build:
     # Apuntamos al runner de 8 núcleos con Ubuntu 22.04
-    runs-on: depot-ubuntu-22.04-64
+    runs-on: depot-ubuntu-22.04-32
     
     steps:
     - name: Limpieza Agresiva
